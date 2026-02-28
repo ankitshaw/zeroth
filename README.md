@@ -1,12 +1,12 @@
 # ⚡ Zeroth
 
-> Zero-cost Snowflake — Replicate Snowflake's core data platform features using 100% open-source technologies.
+> Zero-cost core data platform using 100% open-source technologies.
 
 ## 🎯 What Is This?
 
-**Zeroth** provides a comprehensive **technical architecture and reference implementation** for building a Snowflake-equivalent data platform using open-source components:
+**Zeroth** provides a comprehensive **technical architecture and reference implementation** for building a data platform using open-source components:
 
-| Snowflake Feature | Open-Source Equivalent |
+| Feature | Open-Source Equivalent |
 |---|---|
 | Storage Layer | **MinIO** (S3-compatible object storage) |
 | Table Format | **Apache Iceberg** + **Parquet** |
