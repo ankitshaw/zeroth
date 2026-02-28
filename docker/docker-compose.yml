@@ -1,0 +1,85 @@
+# ===========================================================
+# Zeroth — Local Development Stack
+# ===========================================================
+# Starts: MinIO (storage) + Trino (query engine) + Polaris (catalog)
+#
+# Usage:
+#   docker compose up -d
+#   docker exec -it trino trino
+# ===========================================================
+
+services:
+  # ---------------------------------------------------------
+  # MinIO — S3-compatible Object Storage
+  # Replaces: Snowflake's internal storage layer
+  # ---------------------------------------------------------
+  minio:
+    image: minio/minio:latest
+    container_name: minio
+    ports:
+      - "9000:9000"    # S3 API
+      - "9001:9001"    # Console UI
+    environment:
+      MINIO_ROOT_USER: admin
+      MINIO_ROOT_PASSWORD: password123
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Create default bucket for Iceberg warehouse
+  minio-init:
+    image: minio/mc:latest
+    container_name: minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 admin password123;
+        mc mb local/warehouse --ignore-existing;
+        mc mb local/iceberg --ignore-existing;
+        echo 'Buckets created successfully';
+      "
+
+  # ---------------------------------------------------------
+  # Iceberg REST Catalog
+  # Replaces: Snowflake's metadata layer
+  # ---------------------------------------------------------
+  iceberg-rest:
+    image: tabulario/iceberg-rest:latest
+    container_name: iceberg-rest
+    ports:
+      - "8181:8181"
+    environment:
+      CATALOG_WAREHOUSE: s3://warehouse/
+      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
+      CATALOG_S3_ENDPOINT: http://minio:9000
+      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+      AWS_ACCESS_KEY_ID: admin
+      AWS_SECRET_ACCESS_KEY: password123
+      AWS_REGION: us-east-1
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+
+  # ---------------------------------------------------------
+  # Trino — Distributed SQL Query Engine
+  # Replaces: Snowflake's Virtual Warehouses
+  # ---------------------------------------------------------
+  trino:
+    image: trinodb/trino:latest
+    container_name: trino
+    ports:
+      - "8080:8080"
+    volumes:
+      - ../configs/trino/iceberg.properties:/etc/trino/catalog/iceberg.properties
+    depends_on:
+      - iceberg-rest
+
+volumes:
+  minio-data:
