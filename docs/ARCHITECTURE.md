@@ -15,12 +15,13 @@
 5. [Table Format — Apache Iceberg + Parquet](#5-table-format--apache-iceberg--parquet)
 6. [Catalog & Governance — Apache Polaris](#6-catalog--governance--apache-polaris)
 7. [Query Engine — Trino](#7-query-engine--trino)
-8. [Feature Parity Analysis](#8-feature-parity-analysis)
-9. [Deployment Architecture](#9-deployment-architecture)
-10. [Performance Considerations](#10-performance-considerations)
-11. [Security Architecture](#11-security-architecture)
-12. [Limitations & Trade-offs](#12-limitations--trade-offs)
-13. [Roadmap](#13-roadmap)
+8. [Data Ingestion — Kafka + NiFi](#8-data-ingestion--kafka--nifi)
+9. [Feature Parity Analysis](#9-feature-parity-analysis)
+10. [Deployment Architecture](#10-deployment-architecture)
+11. [Performance Considerations](#11-performance-considerations)
+12. [Security Architecture](#12-security-architecture)
+13. [Limitations & Trade-offs](#13-limitations--trade-offs)
+14. [Roadmap](#14-roadmap)
 
 ---
 
@@ -32,7 +33,7 @@ Snowflake revolutionized cloud data warehousing with three key innovations:
 2. **Multi-cluster shared data** — concurrent workloads with zero contention
 3. **Near-zero administration** — automatic tuning, scaling, and maintenance
 
-This document presents a **fully open-source architecture** that replicates these capabilities using mature, production-proven technologies. The stack centers on **four pillars**:
+This document presents a **fully open-source architecture** that replicates these capabilities using mature, production-proven technologies. The stack centers on **six pillars**:
 
 | Pillar | Technology | Role |
 |--------|-----------|------|
@@ -40,6 +41,8 @@ This document presents a **fully open-source architecture** that replicates thes
 | **Table Format** | Apache Iceberg + Parquet | ACID tables on object storage |
 | **Catalog** | Apache Polaris | Metadata, RBAC, discovery |
 | **Query Engine** | Trino | Distributed SQL (MPP) |
+| **Streaming** | Apache Kafka | Event streaming & buffering |
+| **Ingestion** | Apache NiFi | Visual data flow & ETL routing |
 
 All orchestrated on **Kubernetes** for elastic scaling.
 
@@ -437,7 +440,103 @@ JOIN mongodb.app.user_prefs m ON i.user_id = m.user_id;
 
 ---
 
-## 8. Feature Parity Analysis
+## 8. Data Ingestion — Kafka + NiFi
+
+### The Ingestion Problem
+
+Snowflake provides **Snowpipe** for automatic data ingestion — files land in a stage and are automatically loaded into tables. Replicating this requires two components:
+
+- **Apache Kafka** — Event streaming and buffering (replaces Snowflake Streams)
+- **Apache NiFi** — Visual data flow engine (replaces Snowpipe)
+
+### Pipeline Architecture: Kafka → NiFi → Iceberg
+
+```
+Data Sources                Streaming Buffer          Data Flow Engine           Lakehouse
+────────────                ────────────────          ────────────────           ─────────
+
+APIs          ─┐                                     ┌─ ConvertRecord ─┐
+Databases     ─┤                                     │  (JSON→Parquet) │
+Files (S3)    ─┼──▶  Kafka Topics  ──▶  Apache NiFi ─┤                 ├──▶ Iceberg Tables
+IoT Sensors   ─┤    (ConsumeKafka)     (visual UI)   │  RouteOnAttr    │    (on MinIO)
+Log Streams   ─┘                                     │  ValidateRecord │
+                                                      └─ PutIceberg  ──┘
+```
+
+### Why Kafka? (Streaming Buffer)
+
+| Aspect | Details |
+|--------|---------|
+| **Role** | High-throughput event buffer between producers and NiFi |
+| **KRaft mode** | No ZooKeeper dependency (simplified ops) |
+| **Replay** | Consumers can re-read historical events (Snowflake Streams equivalent) |
+| **Decoupling** | Multiple consumers (NiFi, Spark, Flink) can read the same topics |
+| **Throughput** | Millions of events/sec per cluster |
+| **Retention** | Configurable retention (7 days default, up to infinite) |
+
+### Why NiFi? (Data Flow Engine)
+
+| Aspect | Details |
+|--------|---------|
+| **Role** | Visual, drag-and-drop data routing and transformation |
+| **Snowpipe equivalent** | Consumes from Kafka, transforms, writes to Iceberg |
+| **300+ processors** | Built-in connectors for files, databases, APIs, cloud services |
+| **PutIceberg** | Native Iceberg writer — writes Parquet files directly to Iceberg tables |
+| **Backpressure** | Built-in per-connection backpressure (prevents data loss) |
+| **Visual monitoring** | Real-time flow monitoring, error handling, provenance tracking |
+| **No code required** | Data engineers configure pipelines via UI, not code |
+
+### NiFi Flow: Kafka → Iceberg
+
+A typical NiFi flow for ingesting Kafka events into Iceberg:
+
+```
+┌──────────────┐    ┌────────────────┐    ┌────────────────┐    ┌─────────────┐
+│ ConsumeKafka │──▶ │ ConvertRecord  │──▶ │ ValidateRecord │──▶ │ PutIceberg  │
+│              │    │ (JSON→Parquet) │    │ (schema check) │    │ (write to   │
+│ topic:       │    │                │    │                │    │  MinIO via   │
+│ events.raw   │    │ Reader: JSON   │    │ Schema: Avro   │    │  Polaris     │
+│              │    │ Writer: Parquet│    │                │    │  catalog)    │
+└──────────────┘    └────────────────┘    └────────────────┘    └─────────────┘
+                                                │ invalid
+                                         ┌──────▼──────────┐
+                                         │ PutS3Object     │
+                                         │ (dead letter    │
+                                         │  → s3://errors/)│
+                                         └─────────────────┘
+```
+
+### Key NiFi Processors for Zeroth
+
+| Processor | Purpose |
+|-----------|---------|
+| `ConsumeKafka` | Read events from Kafka topics |
+| `ConvertRecord` | Transform between formats (JSON/Avro/CSV → Parquet) |
+| `ValidateRecord` | Schema validation before writing |
+| `RouteOnAttribute` | Route events to different Iceberg tables by type |
+| `PutIceberg` | Write Parquet files to Iceberg tables via REST catalog |
+| `PutS3Object` | Write to MinIO (dead letter queue, raw archives) |
+| `QueryRecord` | SQL-like filtering and transformation within NiFi |
+| `UpdateAttribute` | Enrich events with metadata before writing |
+
+### Kafka → NiFi vs. Kafka → Flink
+
+| Aspect | Kafka → **NiFi** → Iceberg | Kafka → **Flink** → Iceberg |
+|--------|---------------------------|----------------------------|
+| **Setup** | 🟢 Visual, drag-and-drop | 🔴 Java/SQL code |
+| **Learning curve** | 🟢 Low | 🔴 High |
+| **Transformations** | 🟢 300+ built-in processors | 🟢 Full SQL/Java |
+| **Windowed aggregations** | 🔴 Not supported | 🟢 Native (tumbling, sliding) |
+| **Exactly-once** | 🟡 At-least-once | 🟢 Exactly-once |
+| **Throughput** | 🟡 ~100K events/sec | 🟢 Millions/sec |
+| **Monitoring** | 🟢 Built-in visual UI | 🔴 Separate dashboards |
+| **Best for** | ETL, file routing, moderate scale | Real-time analytics, high scale |
+
+> **Recommendation:** Start with **Kafka → NiFi → Iceberg** for most workloads. Add Flink only if you need windowed stream aggregations or exactly-once at extreme scale.
+
+---
+
+## 9. Feature Parity Analysis
 
 ### Full Feature Comparison
 
@@ -456,8 +555,8 @@ JOIN mongodb.app.user_prefs m ON i.user_id = m.user_id;
 | **Auto-suspend/resume** | ⚠️ Partial | KEDA + K8s HPA | Not as seamless |
 | **Semi-structured data** | ✅ Full | Trino JSON functions | None |
 | **Secure data sharing** | ⚠️ Partial | Polaris cross-catalog | Less polished |
-| **Streams & Tasks** | ⚠️ Partial | Iceberg CDC + Airflow | Manual setup required |
-| **Snowpipe (auto-ingest)** | ⚠️ Partial | Kafka + Flink + Iceberg | More complex |
+| **Streams & Tasks** | ✅ Full | Kafka (streaming) + NiFi (routing) | Visual pipeline builder |
+| **Snowpipe (auto-ingest)** | ✅ Full | Kafka → NiFi → PutIceberg | NiFi drag-and-drop UI |
 | **Query result caching** | ⚠️ Partial | Trino + Alluxio | Not as transparent |
 | **Materialized views** | ❌ Gap | Not native in Iceberg/Trino | Use dbt for models |
 | **UDFs (Java/Python)** | ⚠️ Partial | Trino UDFs (Java) | No Python UDFs |
@@ -476,14 +575,16 @@ JOIN mongodb.app.user_prefs m ON i.user_id = m.user_id;
 
 ---
 
-## 9. Deployment Architecture
+## 10. Deployment Architecture
 
 ### Development (Docker Compose)
 
 ```
 docker-compose.yml
-├── MinIO         (storage)        → localhost:9000
-├── Iceberg REST  (catalog)        → localhost:8181
+├── MinIO         (storage)        → localhost:9000 / :9001 (console)
+├── Polaris       (catalog+RBAC)   → localhost:8181
+├── Kafka         (streaming)      → localhost:9092
+├── NiFi          (ingestion)      → localhost:8443 (HTTPS)
 └── Trino         (query engine)   → localhost:8080
 ```
 
@@ -546,7 +647,7 @@ spec:
 
 ---
 
-## 10. Performance Considerations
+## 11. Performance Considerations
 
 ### Query Performance Optimization
 
@@ -591,7 +692,7 @@ Client ──▶ Trino Coordinator ──▶ Check ─┤ Result Cache  │ ─�
 
 ---
 
-## 11. Security Architecture
+## 12. Security Architecture
 
 ### Defense in Depth
 
@@ -644,7 +745,7 @@ Client ──▶ Trino Coordinator ──▶ Check ─┤ Result Cache  │ ─�
 
 ---
 
-## 12. Limitations & Trade-offs
+## 13. Limitations & Trade-offs
 
 ### Things Snowflake Does Better (Today)
 
@@ -654,8 +755,6 @@ Client ──▶ Trino Coordinator ──▶ Check ─┤ Result Cache  │ ─�
 | **Query optimizer** | Snowflake's optimizer has years of tuning on customer workloads | Trino's CBO is improving; contribute upstream |
 | **Auto-clustering** | Snowflake automatically re-clusters data | Schedule `optimize` jobs via Airflow/cron |
 | **Materialized views** | No native MVs in Trino + Iceberg | Use dbt incremental models |
-| **Snowpipe (auto-ingest)** | No single equivalent | Kafka Connect → Flink → Iceberg sink |
-| **Streams & Tasks** | No native CDC streams | Iceberg incremental reads + Airflow |
 | **Python UDFs** | Trino only supports Java UDFs | Use Spark for Python-heavy workloads |
 | **Marketplace** | No data marketplace | Build custom using Polaris cross-catalog sharing |
 | **Support & SLA** | Community support only | Starburst (commercial Trino) offers enterprise support |
@@ -677,34 +776,41 @@ Client ──▶ Trino Coordinator ──▶ Check ─┤ Result Cache  │ ─�
 
 ---
 
-## 13. Roadmap
+## 14. Roadmap
 
 ### Phase 1: Foundation (Weeks 1–2)
 - [x] MinIO storage cluster
-- [x] Iceberg REST Catalog (basic)
+- [x] Apache Polaris catalog
 - [x] Single Trino cluster
 - [x] Basic SQL queries on Iceberg tables
-- [ ] Docker Compose local dev environment
+- [x] Docker Compose local dev environment
 
-### Phase 2: Governance (Weeks 3–4)
-- [ ] Deploy Apache Polaris
-- [ ] Configure RBAC (catalog roles, principal roles)
+### Phase 2: Data Ingestion (Weeks 3–4)
+- [ ] Deploy Kafka (KRaft mode)
+- [ ] Deploy Apache NiFi
+- [ ] Build Kafka → NiFi → Iceberg pipeline
+- [ ] Configure ConsumeKafka + PutIceberg flow
+- [ ] Set up dead letter queue for failed records
+
+### Phase 3: Governance (Weeks 5–6)
+- [ ] Configure Polaris RBAC (catalog roles, principal roles)
 - [ ] Set up authentication (OAuth/OIDC)
 - [ ] Column-level masking with Ranger
+- [ ] Audit logging
 
-### Phase 3: Production (Weeks 5–8)
+### Phase 4: Production (Weeks 7–10)
 - [ ] Kubernetes deployment (Helm charts)
 - [ ] Multi-cluster Trino (ETL + Analytics warehouses)
 - [ ] Auto-scaling with KEDA
 - [ ] Monitoring (Prometheus + Grafana dashboards)
 - [ ] Alluxio caching layer
 
-### Phase 4: Advanced (Weeks 9–12)
-- [ ] Data ingestion pipeline (Kafka → Flink → Iceberg)
+### Phase 5: Advanced (Weeks 11–14)
 - [ ] dbt integration for transformations
 - [ ] Cross-catalog data sharing via Polaris
 - [ ] Disaster recovery (MinIO site replication)
 - [ ] Cost management and chargeback
+- [ ] Add Flink for windowed stream processing (if needed)
 
 ---
 
@@ -714,6 +820,8 @@ Client ──▶ Trino Coordinator ──▶ Check ─┤ Result Cache  │ ─�
 - [Apache Polaris (Incubating)](https://polaris.apache.org/)
 - [Trino Documentation](https://trino.io/docs/current/)
 - [MinIO Documentation](https://min.io/docs/)
+- [Apache Kafka](https://kafka.apache.org/documentation/)
+- [Apache NiFi Documentation](https://nifi.apache.org/docs.html)
 - [Apache Parquet](https://parquet.apache.org/)
 - [KEDA — Kubernetes Event-driven Autoscaling](https://keda.sh/)
 - [Apache Ranger](https://ranger.apache.org/)

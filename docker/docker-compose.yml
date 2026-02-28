@@ -1,11 +1,17 @@
 # ===========================================================
 # Zeroth — Local Development Stack
 # ===========================================================
-# Starts: MinIO (storage) + Trino (query engine) + Polaris (catalog)
+# Starts: MinIO (storage) + Polaris (catalog) + Trino (query)
+#         + Kafka (streaming) + NiFi (data ingestion)
 #
 # Usage:
 #   docker compose up -d
 #   docker exec -it trino trino
+#
+# UIs:
+#   MinIO Console:  http://localhost:9001
+#   Trino Web UI:   http://localhost:8080
+#   NiFi UI:        https://localhost:8443/nifi
 # ===========================================================
 
 services:
@@ -69,8 +75,8 @@ services:
 
   # ---------------------------------------------------------
   # Apache Polaris — Iceberg REST Catalog + RBAC
-  # Replaces: Snowflake's Cloud Services Layer (metadata, auth, governance)
-  # Originally built inside Snowflake, now open-source under Apache
+  # Replaces: Snowflake's Cloud Services Layer
+  # Originally built inside Snowflake, now Apache open-source
   # ---------------------------------------------------------
   polaris:
     image: apache/polaris:latest
@@ -80,10 +86,8 @@ services:
       - "8182:8182"    # Management API
     environment:
       POLARIS_BOOTSTRAP_DEFAULT_REALMS: default-realm
-      # Persistence backend
       polaris.persistence.type: eclipse-link
       polaris.persistence.eclipselink.configuration-file: /etc/polaris/persistence.xml
-      # Storage config for MinIO/S3
       AWS_ACCESS_KEY_ID: admin
       AWS_SECRET_ACCESS_KEY: password123
       AWS_REGION: us-east-1
@@ -98,6 +102,62 @@ services:
       timeout: 5s
       retries: 10
       start_period: 15s
+
+  # ---------------------------------------------------------
+  # Apache Kafka — Distributed Event Streaming (KRaft mode)
+  # Replaces: Snowflake Streams (CDC) + message buffering
+  # No ZooKeeper required
+  # ---------------------------------------------------------
+  kafka:
+    image: apache/kafka:latest
+    container_name: kafka
+    ports:
+      - "9092:9092"    # Client connections
+      - "9093:9093"    # Controller
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      CLUSTER_ID: "zeroth-kafka-cluster-001"
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  # ---------------------------------------------------------
+  # Apache NiFi — Visual Data Flow & Ingestion Engine
+  # Replaces: Snowpipe (auto-ingest from sources → Iceberg)
+  # Pipeline: Kafka → NiFi (transform, route) → PutIceberg
+  # ---------------------------------------------------------
+  nifi:
+    image: apache/nifi:latest
+    container_name: nifi
+    ports:
+      - "8443:8443"    # NiFi Web UI (HTTPS)
+    environment:
+      NIFI_WEB_HTTPS_PORT: "8443"
+      SINGLE_USER_CREDENTIALS_USERNAME: admin
+      SINGLE_USER_CREDENTIALS_PASSWORD: zeroth-admin-password
+      AWS_ACCESS_KEY_ID: admin
+      AWS_SECRET_ACCESS_KEY: password123
+    volumes:
+      - nifi-data:/opt/nifi/nifi-current/conf
+    depends_on:
+      kafka:
+        condition: service_healthy
+      polaris:
+        condition: service_healthy
 
   # ---------------------------------------------------------
   # Trino — Distributed SQL Query Engine
@@ -121,3 +181,5 @@ services:
 volumes:
   minio-data:
   postgres-data:
+  kafka-data:
+  nifi-data:

@@ -12,6 +12,8 @@
 | Table Format | **Apache Iceberg** + **Parquet** |
 | Query Engine | **Trino** (MPP SQL) |
 | Catalog & RBAC | **Apache Polaris** |
+| Event Streaming | **Apache Kafka** (KRaft mode) |
+| Data Ingestion | **Apache NiFi** (Kafka → NiFi → Iceberg) |
 | Orchestration | **Kubernetes** |
 | Security | **Apache Ranger** + **OPA** |
 
