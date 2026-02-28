@@ -47,25 +47,57 @@ services:
       "
 
   # ---------------------------------------------------------
-  # Iceberg REST Catalog
-  # Replaces: Snowflake's metadata layer
+  # PostgreSQL — Polaris Metadata Backend
+  # Stores catalog metadata (tables, namespaces, privileges)
   # ---------------------------------------------------------
-  iceberg-rest:
-    image: tabulario/iceberg-rest:latest
-    container_name: iceberg-rest
+  postgres:
+    image: postgres:16-alpine
+    container_name: polaris-db
     ports:
-      - "8181:8181"
+      - "5432:5432"
     environment:
-      CATALOG_WAREHOUSE: s3://warehouse/
-      CATALOG_IO__IMPL: org.apache.iceberg.aws.s3.S3FileIO
-      CATALOG_S3_ENDPOINT: http://minio:9000
-      CATALOG_S3_PATH__STYLE__ACCESS: "true"
+      POSTGRES_DB: polaris
+      POSTGRES_USER: polaris
+      POSTGRES_PASSWORD: polaris123
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U polaris"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ---------------------------------------------------------
+  # Apache Polaris — Iceberg REST Catalog + RBAC
+  # Replaces: Snowflake's Cloud Services Layer (metadata, auth, governance)
+  # Originally built inside Snowflake, now open-source under Apache
+  # ---------------------------------------------------------
+  polaris:
+    image: apache/polaris:latest
+    container_name: polaris
+    ports:
+      - "8181:8181"    # REST Catalog API
+      - "8182:8182"    # Management API
+    environment:
+      POLARIS_BOOTSTRAP_DEFAULT_REALMS: default-realm
+      # Persistence backend
+      polaris.persistence.type: eclipse-link
+      polaris.persistence.eclipselink.configuration-file: /etc/polaris/persistence.xml
+      # Storage config for MinIO/S3
       AWS_ACCESS_KEY_ID: admin
       AWS_SECRET_ACCESS_KEY: password123
       AWS_REGION: us-east-1
     depends_on:
+      postgres:
+        condition: service_healthy
       minio-init:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8182/healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
 
   # ---------------------------------------------------------
   # Trino — Distributed SQL Query Engine
@@ -75,11 +107,17 @@ services:
     image: trinodb/trino:latest
     container_name: trino
     ports:
-      - "8080:8080"
+      - "8080:8080"    # Trino Web UI + JDBC
+    environment:
+      AWS_ACCESS_KEY_ID: admin
+      AWS_SECRET_ACCESS_KEY: password123
+      AWS_REGION: us-east-1
     volumes:
       - ../configs/trino/iceberg.properties:/etc/trino/catalog/iceberg.properties
     depends_on:
-      - iceberg-rest
+      polaris:
+        condition: service_healthy
 
 volumes:
   minio-data:
+  postgres-data:
