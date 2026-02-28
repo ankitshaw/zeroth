@@ -2,16 +2,17 @@
 # Zeroth — Local Development Stack
 # ===========================================================
 # Starts: MinIO (storage) + Polaris (catalog) + Trino (query)
-#         + Kafka (streaming) + NiFi (data ingestion)
+#         + Kafka (streaming) + NiFi (ingestion) + Superset (UI)
 #
 # Usage:
 #   docker compose up -d
 #   docker exec -it trino trino
 #
 # UIs:
-#   MinIO Console:  http://localhost:9001
-#   Trino Web UI:   http://localhost:8080
-#   NiFi UI:        https://localhost:8443/nifi
+#   Superset (BI):    http://localhost:8088  (admin/admin)
+#   MinIO Console:    http://localhost:9001
+#   Trino Web UI:     http://localhost:8080
+#   NiFi UI:          https://localhost:8443/nifi
 # ===========================================================
 
 services:
@@ -178,8 +179,93 @@ services:
       polaris:
         condition: service_healthy
 
+  # ---------------------------------------------------------
+  # Redis — Caching Backend for Superset
+  # ---------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ---------------------------------------------------------
+  # Superset Metadata DB (separate from Polaris DB)
+  # ---------------------------------------------------------
+  superset-db:
+    image: postgres:16-alpine
+    container_name: superset-db
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_DB: superset
+      POSTGRES_USER: superset
+      POSTGRES_PASSWORD: superset123
+    volumes:
+      - superset-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U superset"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ---------------------------------------------------------
+  # Apache Superset — BI & SQL IDE
+  # Replaces: Snowsight (web UI, dashboards, SQL worksheets)
+  # ---------------------------------------------------------
+  superset:
+    image: apache/superset:latest
+    container_name: superset
+    ports:
+      - "8088:8088"    # Superset Web UI
+    environment:
+      SUPERSET_SECRET_KEY: "zeroth-superset-secret-key-change-in-prod"
+      # Metadata database (Superset's own state)
+      SQLALCHEMY_DATABASE_URI: "postgresql+psycopg2://superset:superset123@superset-db:5432/superset"
+      # Redis for caching and Celery
+      REDIS_URL: "redis://redis:6379/0"
+      # Admin user
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: admin
+      ADMIN_EMAIL: admin@zeroth.local
+      ADMIN_FIRST_NAME: Zeroth
+      ADMIN_LAST_NAME: Admin
+    depends_on:
+      superset-db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      trino:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    command: >
+      /bin/sh -c "
+        superset db upgrade &&
+        superset fab create-admin
+          --username admin
+          --firstname Zeroth
+          --lastname Admin
+          --email admin@zeroth.local
+          --password admin || true &&
+        superset init &&
+        superset run -h 0.0.0.0 -p 8088 --with-threads
+      "
+
 volumes:
   minio-data:
   postgres-data:
   kafka-data:
   nifi-data:
+  redis-data:
+  superset-db-data:

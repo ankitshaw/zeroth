@@ -14,6 +14,7 @@
 | Catalog & RBAC | **Apache Polaris** |
 | Event Streaming | **Apache Kafka** (KRaft mode) |
 | Data Ingestion | **Apache NiFi** (Kafka → NiFi → Iceberg) |
+| Web UI / BI | **Apache Superset** (SQL Lab + dashboards) |
 | Orchestration | **Kubernetes** |
 | Security | **Apache Ranger** + **OPA** |
 

@@ -16,12 +16,13 @@
 6. [Catalog & Governance — Apache Polaris](#6-catalog--governance--apache-polaris)
 7. [Query Engine — Trino](#7-query-engine--trino)
 8. [Data Ingestion — Kafka + NiFi](#8-data-ingestion--kafka--nifi)
-9. [Feature Parity Analysis](#9-feature-parity-analysis)
-10. [Deployment Architecture](#10-deployment-architecture)
-11. [Performance Considerations](#11-performance-considerations)
-12. [Security Architecture](#12-security-architecture)
-13. [Limitations & Trade-offs](#13-limitations--trade-offs)
-14. [Roadmap](#14-roadmap)
+9. [Web UI — Apache Superset](#9-web-ui--apache-superset)
+10. [Feature Parity Analysis](#10-feature-parity-analysis)
+11. [Deployment Architecture](#11-deployment-architecture)
+12. [Performance Considerations](#12-performance-considerations)
+13. [Security Architecture](#13-security-architecture)
+14. [Limitations & Trade-offs](#14-limitations--trade-offs)
+15. [Roadmap](#15-roadmap)
 
 ---
 
@@ -33,7 +34,7 @@ Snowflake revolutionized cloud data warehousing with three key innovations:
 2. **Multi-cluster shared data** — concurrent workloads with zero contention
 3. **Near-zero administration** — automatic tuning, scaling, and maintenance
 
-This document presents a **fully open-source architecture** that replicates these capabilities using mature, production-proven technologies. The stack centers on **six pillars**:
+This document presents a **fully open-source architecture** that replicates these capabilities using mature, production-proven technologies. The stack centers on **seven pillars**:
 
 | Pillar | Technology | Role |
 |--------|-----------|------|
@@ -43,6 +44,7 @@ This document presents a **fully open-source architecture** that replicates thes
 | **Query Engine** | Trino | Distributed SQL (MPP) |
 | **Streaming** | Apache Kafka | Event streaming & buffering |
 | **Ingestion** | Apache NiFi | Visual data flow & ETL routing |
+| **Web UI** | Apache Superset | SQL IDE, dashboards, data explorer |
 
 All orchestrated on **Kubernetes** for elastic scaling.
 
@@ -536,7 +538,77 @@ A typical NiFi flow for ingesting Kafka events into Iceberg:
 
 ---
 
-## 9. Feature Parity Analysis
+## 9. Web UI — Apache Superset
+
+### Why Superset?
+
+Apache Superset is an **open-source BI platform** that replaces Snowflake's **Snowsight** web console. It provides a SQL editor, rich dashboards, and data exploration — all connected to Trino.
+
+### Mapping to Snowsight
+
+| Snowsight Feature | Superset Equivalent |
+|---|---|
+| **Worksheets** (SQL editor) | **SQL Lab** — full SQL IDE with auto-complete, query history |
+| **Dashboards** | **Dashboards** — 50+ chart types, filters, drill-down |
+| **Data Explorer** | **Dataset browser** — browse schemas, tables, columns |
+| **Query History** | **Query history** — past queries, re-run, share |
+| **Charts & Viz** | **Explore** — bar, line, pie, heatmap, geospatial, etc. |
+| **Sharing** | **Dashboard sharing** — public links, embedded iframes |
+| **RBAC** | **Role-based access** — row-level security, dataset permissions |
+| **Alerts** | **Alerts & Reports** — scheduled queries, email/Slack alerts |
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│              Apache Superset                       │
+│          (≈ Snowflake Snowsight)                    │
+│                                                     │
+│  ┌─────────────┐  ┌───────────┐  ┌─────────────┐  │
+│  │  SQL Lab     │  │ Dashboards│  │ Data Explorer│  │
+│  │  (Worksheets)│  │ (Charts)  │  │ (Datasets)   │  │
+│  └──────┬──────┘  └────┬──────┘  └──────┬──────┘  │
+│         └──────────┼──────────┘                │
+│                    │                              │
+│         ┌──────────▼─────────────┐           │
+│         │  SQLAlchemy + Trino    │           │
+│         │  (trino://trino:8080)  │           │
+│         └────────────────────────┘           │
+└─────────────────────────────────────────────────────┘
+                    │
+             ┌──────▼──────────────────┐
+             │  Trino Query Engine     │
+             │  (Iceberg on MinIO)     │
+             └─────────────────────────┘
+```
+
+### Connecting Superset to Trino
+
+Superset connects to Trino via the **SQLAlchemy Trino driver**:
+
+```
+# Superset database connection string
+trino://trino@trino:8080/iceberg
+```
+
+Once connected, all Iceberg schemas and tables are browsable in Superset's SQL Lab, and queryable for dashboards.
+
+### Key Superset Features for Zeroth
+
+| Feature | Description |
+|---------|-----------|
+| **SQL Lab** | Full SQL IDE with syntax highlighting, auto-complete, and results grid |
+| **50+ chart types** | Bar, line, pie, treemap, heatmap, geospatial, time-series, etc. |
+| **Dashboard filters** | Cross-filter across charts, date range pickers, dropdown filters |
+| **Jinja templating** | Dynamic SQL with `{{ current_username() }}`, date macros |
+| **Row-level security** | Restrict data visibility per role (like Snowflake row access policies) |
+| **Alerts & Reports** | Schedule queries, get notified on thresholds (email/Slack) |
+| **Embedded analytics** | Embed dashboards via iframe in your own apps |
+| **Caching** | Redis-backed query caching for faster dashboard loads |
+
+---
+
+## 10. Feature Parity Analysis
 
 ### Full Feature Comparison
 
@@ -575,7 +647,7 @@ A typical NiFi flow for ingesting Kafka events into Iceberg:
 
 ---
 
-## 10. Deployment Architecture
+## 11. Deployment Architecture
 
 ### Development (Docker Compose)
 
@@ -585,7 +657,8 @@ docker-compose.yml
 ├── Polaris       (catalog+RBAC)   → localhost:8181
 ├── Kafka         (streaming)      → localhost:9092
 ├── NiFi          (ingestion)      → localhost:8443 (HTTPS)
-└── Trino         (query engine)   → localhost:8080
+├── Trino         (query engine)   → localhost:8080
+└── Superset      (web UI / BI)    → localhost:8088
 ```
 
 See [`docker/docker-compose.yml`](../docker/docker-compose.yml) for the full configuration.
@@ -647,7 +720,7 @@ spec:
 
 ---
 
-## 11. Performance Considerations
+## 12. Performance Considerations
 
 ### Query Performance Optimization
 
@@ -692,7 +765,7 @@ Client ──▶ Trino Coordinator ──▶ Check ─┤ Result Cache  │ ─�
 
 ---
 
-## 12. Security Architecture
+## 13. Security Architecture
 
 ### Defense in Depth
 
@@ -745,7 +818,7 @@ Client ──▶ Trino Coordinator ──▶ Check ─┤ Result Cache  │ ─�
 
 ---
 
-## 13. Limitations & Trade-offs
+## 14. Limitations & Trade-offs
 
 ### Things Snowflake Does Better (Today)
 
@@ -776,7 +849,7 @@ Client ──▶ Trino Coordinator ──▶ Check ─┤ Result Cache  │ ─�
 
 ---
 
-## 14. Roadmap
+## 15. Roadmap
 
 ### Phase 1: Foundation (Weeks 1–2)
 - [x] MinIO storage cluster
