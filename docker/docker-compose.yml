@@ -241,6 +241,8 @@ services:
       AWS_SECRET_ACCESS_KEY: password123
     volumes:
       - nifi-data:/opt/nifi/nifi-current/conf
+      - nifi-flow:/opt/nifi/nifi-current/flow
+      - nifi-lib-extra:/opt/nifi/nifi-current/lib-extra
     depends_on:
       redpanda:
         condition: service_healthy
@@ -398,5 +400,7 @@ volumes:
   postgres-data:
   redpanda-data:
   nifi-data:
+  nifi-flow:
+  nifi-lib-extra:
   redis-data:
   superset-db-data:
