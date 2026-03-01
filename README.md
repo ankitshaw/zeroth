@@ -30,6 +30,25 @@ Think of it as your **own cloud data warehouse** — with full SQL analytics, AC
 - 🛡️ **Built-in governance** — Apache Polaris for catalog-level RBAC and access control
 - 📊 **Batteries included** — streaming ingestion, SQL IDE, dashboards, all pre-configured
 
+## 🏗️ Architecture
+
+![Zeroth Architecture](docs/architecture-diagram.png)
+
+The stack follows a **three-layer architecture** — separating storage, compute, and catalog:
+
+```
+┌────────────────────────────────────────────────────────┐
+│  Catalog Layer        → Apache Polaris (Catalog, RBAC) │
+├────────────────────────────────────────────────────────┤
+│  Compute Layer        → Trino (Distributed SQL / MPP)  │
+├────────────────────────────────────────────────────────┤
+│  Storage Layer        → MinIO + Iceberg + Parquet      │
+└────────────────────────────────────────────────────────┘
+    ↑ Redpanda + NiFi (ingestion)  ↑ Superset (BI / SQL)
+```
+
+See **[Full Architecture Document →](docs/ARCHITECTURE.md)** for component deep-dives and production deployment topology.
+
 ## 🧱 Technology Stack
 
 | Layer | Technology | Role |
@@ -228,24 +247,6 @@ pip install pyiceberg pyarrow requests
 python examples/test.py
 ```
 
-## 🏗️ Architecture
-
-![Zeroth Architecture](docs/architecture-diagram.png)
-
-The stack follows Snowflake's three-layer architecture:
-
-```
-┌────────────────────────────────────────────────────────┐
-│  Cloud Services Layer → Apache Polaris (Catalog, RBAC) │
-├────────────────────────────────────────────────────────┤
-│  Compute Layer        → Trino (Distributed SQL / MPP)  │
-├────────────────────────────────────────────────────────┤
-│  Storage Layer        → MinIO + Iceberg + Parquet      │
-└────────────────────────────────────────────────────────┘
-    ↑ Redpanda + NiFi (ingestion)  ↑ Superset (BI / SQL)
-```
-
-See **[Full Architecture Document →](docs/ARCHITECTURE.md)** for component deep-dives, feature parity analysis, and production deployment topology.
 
 ## ⚙️ Key Configuration Details
 
