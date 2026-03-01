@@ -42,11 +42,15 @@ This document presents a **fully open-source architecture** that replicates thes
 | **Table Format** | Apache Iceberg + Parquet | ACID tables on object storage |
 | **Catalog** | Apache Polaris | Metadata, RBAC, discovery |
 | **Query Engine** | Trino | Distributed SQL (MPP) |
-| **Streaming** | Apache Kafka | Event streaming & buffering |
+| **Streaming** | Redpanda | Kafka-compatible event streaming (C++, no JVM) |
 | **Ingestion** | Apache NiFi | Visual data flow & ETL routing |
 | **Web UI** | Apache Superset | SQL IDE, dashboards, data explorer |
 
 All orchestrated on **Kubernetes** for elastic scaling.
+
+### Current Architecture
+
+![Zeroth Architecture Diagram](architecture-diagram.png)
 
 ---
 
@@ -263,34 +267,34 @@ Apache Polaris was **originally built inside Snowflake** as their internal Icebe
 ### Polaris Architecture
 
 ```
-┌─────────────────────────────────────────────┐
-│              Apache Polaris                   │
-│                                               │
+┌──────────────────────────────────────────────┐
+│              Apache Polaris                  │
+│                                              │
 │  ┌─────────────────────────────────────────┐ │
-│  │          REST Catalog API                │ │
-│  │  (Iceberg REST Spec compliant)           │ │
+│  │          REST Catalog API               │ │
+│  │  (Iceberg REST Spec compliant)          │ │
 │  └──────────┬──────────────────────────────┘ │
-│             │                                 │
+│             │                                │
 │  ┌──────────▼──────────────────────────────┐ │
-│  │     Catalog Management                   │ │
-│  │  • Namespaces (≈ Snowflake databases)    │ │
-│  │  • Tables                                │ │
-│  │  • Views                                 │ │
+│  │     Catalog Management                  │ │
+│  │  • Namespaces (≈ Snowflake databases)   │ │
+│  │  • Tables                               │ │
+│  │  • Views                                │ │
 │  └──────────┬──────────────────────────────┘ │
-│             │                                 │
+│             │                                │
 │  ┌──────────▼──────────────────────────────┐ │
-│  │     Access Control (RBAC)                │ │
-│  │  • Catalog roles                         │ │
-│  │  • Principal roles                       │ │
-│  │  • Privilege grants                      │ │
+│  │     Access Control (RBAC)               │ │
+│  │  • Catalog roles                        │ │
+│  │  • Principal roles                      │ │
+│  │  • Privilege grants                     │ │
 │  └──────────┬──────────────────────────────┘ │
-│             │                                 │
+│             │                                │
 │  ┌──────────▼──────────────────────────────┐ │
-│  │     Storage Profiles                     │ │
-│  │  • S3, GCS, ADLS, MinIO                  │ │
-│  │  • Vended credentials                    │ │
+│  │     Storage Profiles                    │ │
+│  │  • S3, GCS, ADLS, MinIO                 │ │
+│  │  • Vended credentials                   │ │
 │  └─────────────────────────────────────────┘ │
-└─────────────────────────────────────────────┘
+└──────────────────────────────────────────────┘
 ```
 
 ### Mapping to Snowflake Concepts
@@ -442,16 +446,16 @@ JOIN mongodb.app.user_prefs m ON i.user_id = m.user_id;
 
 ---
 
-## 8. Data Ingestion — Kafka + NiFi
+## 8. Data Ingestion — Redpanda + NiFi
 
 ### The Ingestion Problem
 
 Snowflake provides **Snowpipe** for automatic data ingestion — files land in a stage and are automatically loaded into tables. Replicating this requires two components:
 
-- **Apache Kafka** — Event streaming and buffering (replaces Snowflake Streams)
+- **Redpanda** — Kafka-compatible event streaming in C++ (replaces Snowflake Streams)
 - **Apache NiFi** — Visual data flow engine (replaces Snowpipe)
 
-### Pipeline Architecture: Kafka → NiFi → Iceberg
+### Pipeline Architecture: Redpanda → NiFi → Iceberg
 
 ```
 Data Sources                Streaming Buffer          Data Flow Engine           Lakehouse
@@ -459,18 +463,19 @@ Data Sources                Streaming Buffer          Data Flow Engine          
 
 APIs          ─┐                                     ┌─ ConvertRecord ─┐
 Databases     ─┤                                     │  (JSON→Parquet) │
-Files (S3)    ─┼──▶  Kafka Topics  ──▶  Apache NiFi ─┤                 ├──▶ Iceberg Tables
+Files (S3)    ─┼──▶ Redpanda Topics ──▶ Apache NiFi ─┤                 ├──▶ Iceberg Tables
 IoT Sensors   ─┤    (ConsumeKafka)     (visual UI)   │  RouteOnAttr    │    (on MinIO)
 Log Streams   ─┘                                     │  ValidateRecord │
-                                                      └─ PutIceberg  ──┘
+                                                     └── PutIceberg  ──┘
 ```
 
-### Why Kafka? (Streaming Buffer)
+### Why Redpanda? (Streaming Buffer)
 
 | Aspect | Details |
 |--------|---------|
 | **Role** | High-throughput event buffer between producers and NiFi |
-| **KRaft mode** | No ZooKeeper dependency (simplified ops) |
+| **Kafka compatible** | 100% Kafka wire-protocol compatible — all Kafka clients work unchanged |
+| **No JVM** | Written in C++, uses ~256 MB RAM vs Kafka's ~1-2 GB |
 | **Replay** | Consumers can re-read historical events (Snowflake Streams equivalent) |
 | **Decoupling** | Multiple consumers (NiFi, Spark, Flink) can read the same topics |
 | **Throughput** | Millions of events/sec per cluster |
@@ -481,50 +486,52 @@ Log Streams   ─┘                                     │  ValidateRecord │
 | Aspect | Details |
 |--------|---------|
 | **Role** | Visual, drag-and-drop data routing and transformation |
-| **Snowpipe equivalent** | Consumes from Kafka, transforms, writes to Iceberg |
+| **Snowpipe equivalent** | Consumes from Redpanda, transforms, writes to Iceberg via Trino |
 | **300+ processors** | Built-in connectors for files, databases, APIs, cloud services |
-| **PutIceberg** | Native Iceberg writer — writes Parquet files directly to Iceberg tables |
+| **PutDatabaseRecord** | JDBC-based Iceberg writer via Trino (PutIceberg has MinIO compatibility issues) |
 | **Backpressure** | Built-in per-connection backpressure (prevents data loss) |
 | **Visual monitoring** | Real-time flow monitoring, error handling, provenance tracking |
 | **No code required** | Data engineers configure pipelines via UI, not code |
 
-### NiFi Flow: Kafka → Iceberg
+### NiFi Flow: Redpanda → Trino → Iceberg
 
-A typical NiFi flow for ingesting Kafka events into Iceberg:
+The working NiFi pipeline uses **PutDatabaseRecord** with Trino JDBC to write to Iceberg tables. NiFi's `PutIceberg` processor has a known NPE bug with non-AWS S3 endpoints like MinIO (`writer is null`), so data is routed through Trino instead:
 
 ```
-┌──────────────┐    ┌────────────────┐    ┌────────────────┐    ┌─────────────┐
-│ ConsumeKafka │──▶ │ ConvertRecord  │──▶ │ ValidateRecord │──▶ │ PutIceberg  │
-│              │    │ (JSON→Parquet) │    │ (schema check) │    │ (write to   │
-│ topic:       │    │                │    │                │    │  MinIO via   │
-│ events.raw   │    │ Reader: JSON   │    │ Schema: Avro   │    │  Polaris     │
-│              │    │ Writer: Parquet│    │                │    │  catalog)    │
-└──────────────┘    └────────────────┘    └────────────────┘    └─────────────┘
-                                                │ invalid
-                                         ┌──────▼──────────┐
-                                         │ PutS3Object     │
-                                         │ (dead letter    │
-                                         │  → s3://errors/)│
-                                         └─────────────────┘
+┌──────────────┐    ┌───────────────────┐
+│ ConsumeKafka │──▶ │ PutDatabaseRecord │
+│              │    │                   │
+│ bootstrap:   │    │ JDBC: Trino       │
+│ redpanda:9092│    │ Table: events     │
+│ topic:       │    │ Auto-Commit: true │
+│ raw-events   │    │ Reader: JSON      │
+└──────────────┘    └────────┬──────────┘
+                             │ INSERT via JDBC
+                    ┌────────▼──────────┐
+                    │  Trino (SQL)      │
+                    │  → Iceberg format │
+                    │  → MinIO (S3)     │
+                    └───────────────────┘
 ```
+
+> **Why not PutIceberg?** NiFi 2.8.0's PutIceberg produces a `NullPointerException: writer is null` when writing to MinIO. The Parquet DataWriter factory fails silently for non-AWS S3 endpoints. Routing writes through Trino's JDBC driver bypasses this entirely since Trino already has working MinIO integration.
 
 ### Key NiFi Processors for Zeroth
 
 | Processor | Purpose |
 |-----------|---------|
-| `ConsumeKafka` | Read events from Kafka topics |
-| `ConvertRecord` | Transform between formats (JSON/Avro/CSV → Parquet) |
+| `ConsumeKafka` | Read events from Redpanda topics (Kafka wire-compatible) |
+| `PutDatabaseRecord` | Insert records into Iceberg tables via Trino JDBC |
+| `ConvertRecord` | Transform between formats (JSON/Avro/CSV) |
 | `ValidateRecord` | Schema validation before writing |
 | `RouteOnAttribute` | Route events to different Iceberg tables by type |
-| `PutIceberg` | Write Parquet files to Iceberg tables via REST catalog |
 | `PutS3Object` | Write to MinIO (dead letter queue, raw archives) |
 | `QueryRecord` | SQL-like filtering and transformation within NiFi |
-| `UpdateAttribute` | Enrich events with metadata before writing |
 
-### Kafka → NiFi vs. Kafka → Flink
+### Redpanda + NiFi vs. Flink
 
-| Aspect | Kafka → **NiFi** → Iceberg | Kafka → **Flink** → Iceberg |
-|--------|---------------------------|----------------------------|
+| Aspect | Redpanda → **NiFi** → Iceberg | Redpanda → **Flink** → Iceberg |
+|--------|-------------------------------|-------------------------------|
 | **Setup** | 🟢 Visual, drag-and-drop | 🔴 Java/SQL code |
 | **Learning curve** | 🟢 Low | 🔴 High |
 | **Transformations** | 🟢 300+ built-in processors | 🟢 Full SQL/Java |
@@ -534,7 +541,7 @@ A typical NiFi flow for ingesting Kafka events into Iceberg:
 | **Monitoring** | 🟢 Built-in visual UI | 🔴 Separate dashboards |
 | **Best for** | ETL, file routing, moderate scale | Real-time analytics, high scale |
 
-> **Recommendation:** Start with **Kafka → NiFi → Iceberg** for most workloads. Add Flink only if you need windowed stream aggregations or exactly-once at extreme scale.
+> **Recommendation:** Start with **Redpanda → NiFi → Iceberg** for most workloads. Add Flink only if you need windowed stream aggregations or exactly-once at extreme scale.
 
 ---
 
@@ -561,24 +568,25 @@ Apache Superset is an **open-source BI platform** that replaces Snowflake's **Sn
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│              Apache Superset                       │
+│              Apache Superset                        │
 │          (≈ Snowflake Snowsight)                    │
 │                                                     │
-│  ┌─────────────┐  ┌───────────┐  ┌─────────────┐  │
+│  ┌──────────────┐  ┌───────────┐  ┌──────────────┐  │
 │  │  SQL Lab     │  │ Dashboards│  │ Data Explorer│  │
 │  │  (Worksheets)│  │ (Charts)  │  │ (Datasets)   │  │
-│  └──────┬──────┘  └────┬──────┘  └──────┬──────┘  │
-│         └──────────┼──────────┘                │
-│                    │                              │
-│         ┌──────────▼─────────────┐           │
-│         │  SQLAlchemy + Trino    │           │
-│         │  (trino://trino:8080)  │           │
-│         └────────────────────────┘           │
+│  └──────┬───────┘  └─────┬─────┘  └──────┬───────┘  │
+│         └────────────────┼───────────────┘          │
+│                          │                          │
+│                          │                          │
+│               ┌──────────▼─────────────┐            │
+│               │  SQLAlchemy + Trino    │            │
+│               │  (trino://trino:8080)  │            │
+│               └────────────────────────┘            │
 └─────────────────────────────────────────────────────┘
-                    │
-             ┌──────▼──────────────────┐
-             │  Trino Query Engine     │
-             │  (Iceberg on MinIO)     │
+                           │ 
+             ┌─────────────▼───────────┐
+             │    Trino Query Engine   │
+             │    (Iceberg on MinIO)   │
              └─────────────────────────┘
 ```
 
@@ -627,8 +635,8 @@ Once connected, all Iceberg schemas and tables are browsable in Superset's SQL L
 | **Auto-suspend/resume** | ⚠️ Partial | KEDA + K8s HPA | Not as seamless |
 | **Semi-structured data** | ✅ Full | Trino JSON functions | None |
 | **Secure data sharing** | ⚠️ Partial | Polaris cross-catalog | Less polished |
-| **Streams & Tasks** | ✅ Full | Kafka (streaming) + NiFi (routing) | Visual pipeline builder |
-| **Snowpipe (auto-ingest)** | ✅ Full | Kafka → NiFi → PutIceberg | NiFi drag-and-drop UI |
+| **Streams & Tasks** | ✅ Full | Redpanda (streaming) + NiFi (routing) | Visual pipeline builder |
+| **Snowpipe (auto-ingest)** | ✅ Full | Redpanda → NiFi → PutIceberg | NiFi drag-and-drop UI |
 | **Query result caching** | ⚠️ Partial | Trino + Alluxio | Not as transparent |
 | **Materialized views** | ❌ Gap | Not native in Iceberg/Trino | Use dbt for models |
 | **UDFs (Java/Python)** | ⚠️ Partial | Trino UDFs (Java) | No Python UDFs |
@@ -649,16 +657,34 @@ Once connected, all Iceberg schemas and tables are browsable in Superset's SQL L
 
 ## 11. Deployment Architecture
 
-### Development (Docker Compose)
+### Development (Docker Compose — 14 services, 3 profiles)
 
 ```
-docker-compose.yml
-├── MinIO         (storage)        → localhost:9000 / :9001 (console)
-├── Polaris       (catalog+RBAC)   → localhost:8181
-├── Kafka         (streaming)      → localhost:9092
-├── NiFi          (ingestion)      → localhost:8443 (HTTPS)
-├── Trino         (query engine)   → localhost:8080
-└── Superset      (web UI / BI)    → localhost:8088
+docker-compose.yml (3 profiles)
+
+  Profile: core
+  ├── MinIO              (S3 storage)       → localhost:9000 / :9001 (console)
+  ├── minio-init         (bucket creation)  → creates warehouse + iceberg buckets
+  ├── PostgreSQL         (Polaris metadata) → localhost:5432
+  ├── Polaris            (catalog + RBAC)   → localhost:8181 / :8182 (mgmt)
+  └── Trino              (query engine)     → localhost:8080
+
+  Profile: bootstrap-db / bootstrap (run once)
+  ├── polaris-db-bootstrap   (schema migration)
+  └── polaris-bootstrap      (catalog, roles, grants)
+
+  Profile: ingestion
+  ├── Redpanda           (streaming, C++)   → localhost:9092 / :8082 (HTTP)
+  ├── Redpanda Console   (streaming UI)     → localhost:8084
+  └── NiFi               (data flow)        → https://localhost:8443
+
+  Profile: ui
+  ├── Redis              (cache + broker)   → localhost:6379
+  ├── Redis Commander    (Redis UI)         → localhost:8081
+  ├── Superset DB        (PostgreSQL)       → localhost:5433
+  ├── Superset           (BI / SQL Lab)     → localhost:8088
+  ├── Superset Worker    (Celery async)     → background
+  └── Superset Flower    (task monitor)     → localhost:5555
 ```
 
 See [`docker/docker-compose.yml`](../docker/docker-compose.yml) for the full configuration.
@@ -750,16 +776,16 @@ Benchmarks vary by hardware, data, and query patterns. General guidance:
 ```
 Query Flow:
                                         ┌──────────────┐
-Client ──▶ Trino Coordinator ──▶ Check ─┤ Result Cache  │ ──▶ Return cached result
+Client ──▶ Trino Coordinator ──▶ Check ─┤ Result Cache │ ──▶ Return cached result
                                         └──────┬───────┘
                                                │ miss
                                         ┌──────▼───────┐
-                                        │ Alluxio       │ ──▶ Read from local SSD
-                                        │ (data cache)  │
+                                        │ Alluxio      │ ──▶ Read from local SSD
+                                        │ (data cache) │
                                         └──────┬───────┘
                                                │ miss
                                         ┌──────▼───────┐
-                                        │ MinIO (S3)    │ ──▶ Read from object storage
+                                        │ MinIO (S3)   │ ──▶ Read from object storage
                                         └──────────────┘
 ```
 
@@ -771,30 +797,30 @@ Client ──▶ Trino Coordinator ──▶ Check ─┤ Result Cache  │ ─�
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Layer 1: Network Security                               │
-│  • K8s Network Policies                                  │
-│  • TLS everywhere (mTLS between services)                │
+│  Layer 1: Network Security                              │
+│  • K8s Network Policies                                 │
+│  • TLS everywhere (mTLS between services)               │
 ├─────────────────────────────────────────────────────────┤
-│  Layer 2: Authentication                                 │
-│  • OAuth 2.0 / OIDC (Keycloak)                           │
-│  • LDAP integration                                      │
-│  • Service-to-service mTLS                               │
+│  Layer 2: Authentication                                │
+│  • OAuth 2.0 / OIDC (Keycloak)                          │
+│  • LDAP integration                                     │
+│  • Service-to-service mTLS                              │
 ├─────────────────────────────────────────────────────────┤
-│  Layer 3: Authorization (RBAC)                           │
-│  • Polaris: Catalog-level RBAC                           │
-│  • Apache Ranger: Fine-grained table/column policies     │
-│  • OPA: Policy-as-code for custom rules                  │
+│  Layer 3: Authorization (RBAC)                          │
+│  • Polaris: Catalog-level RBAC                          │
+│  • Apache Ranger: Fine-grained table/column policies    │
+│  • OPA: Policy-as-code for custom rules                 │
 ├─────────────────────────────────────────────────────────┤
-│  Layer 4: Data Protection                                │
-│  • MinIO SSE (encryption at rest)                        │
-│  • TLS (encryption in transit)                           │
-│  • Column-level masking (via Ranger)                     │
-│  • Row-level filtering (via Ranger)                      │
+│  Layer 4: Data Protection                               │
+│  • MinIO SSE (encryption at rest)                       │
+│  • TLS (encryption in transit)                          │
+│  • Column-level masking (via Ranger)                    │
+│  • Row-level filtering (via Ranger)                     │
 ├─────────────────────────────────────────────────────────┤
-│  Layer 5: Auditing                                       │
-│  • Trino query audit log                                 │
-│  • Polaris access audit log                              │
-│  • MinIO access logs → centralized logging               │
+│  Layer 5: Auditing                                      │
+│  • Trino query audit log                                │
+│  • Polaris access audit log                             │
+│  • MinIO access logs → centralized logging              │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -851,22 +877,26 @@ Client ──▶ Trino Coordinator ──▶ Check ─┤ Result Cache  │ ─�
 
 ## 15. Roadmap
 
-### Phase 1: Foundation (Weeks 1–2)
-- [x] MinIO storage cluster
-- [x] Apache Polaris catalog
-- [x] Single Trino cluster
-- [x] Basic SQL queries on Iceberg tables
-- [x] Docker Compose local dev environment
+### Phase 1: Foundation ✅
+- [x] MinIO storage cluster with path-style S3 access
+- [x] Apache Polaris catalog with PostgreSQL persistence
+- [x] Polaris bootstrap automation (catalog, roles, privileges)
+- [x] Single Trino cluster with Native S3 + OAuth2
+- [x] Basic SQL queries on Iceberg tables (schema → table → insert → select)
+- [x] Docker Compose local dev environment with phased startup
+- [x] PyIceberg Python ingestion script
 
-### Phase 2: Data Ingestion (Weeks 3–4)
-- [ ] Deploy Kafka (KRaft mode)
-- [ ] Deploy Apache NiFi
-- [ ] Build Kafka → NiFi → Iceberg pipeline
+### Phase 2: Data Ingestion + BI ✅
+- [x] Deploy Redpanda (Kafka-compatible, C++, no JVM)
+- [x] Deploy Apache NiFi (HTTPS, single-user auth)
+- [x] Deploy Superset with Celery workers, Flower, Redis
+- [ ] Build Redpanda → NiFi → Iceberg pipeline
 - [ ] Configure ConsumeKafka + PutIceberg flow
 - [ ] Set up dead letter queue for failed records
+- [ ] Create sample Superset dashboard with Trino connection
 
 ### Phase 3: Governance (Weeks 5–6)
-- [ ] Configure Polaris RBAC (catalog roles, principal roles)
+- [x] Configure Polaris RBAC (catalog roles, principal roles)
 - [ ] Set up authentication (OAuth/OIDC)
 - [ ] Column-level masking with Ranger
 - [ ] Audit logging
@@ -902,4 +932,4 @@ Client ──▶ Trino Coordinator ──▶ Check ─┤ Result Cache  │ ─�
 
 ---
 
-*Document generated as part of the Zeroth project — February 2026*
+*Document generated as part of the Zeroth project — Last updated: February 28, 2026*

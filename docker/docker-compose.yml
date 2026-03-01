@@ -195,35 +195,34 @@ services:
   # =========================================================
 
   # ---------------------------------------------------------
-  # Apache Kafka — Event Streaming (KRaft, no ZooKeeper)
+  # Redpanda — Kafka-compatible Event Streaming (C++, no JVM)
+  # Drop-in replacement for Kafka with ~10x less memory usage
   # ---------------------------------------------------------
-  kafka:
-    image: apache/kafka:latest
-    container_name: kafka
+  redpanda:
+    image: redpandadata/redpanda:latest
+    container_name: redpanda
     profiles: ["ingestion"]
+    command:
+      - redpanda start
+      - --smp 1
+      - --memory 256M
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:9092
+      - --pandaproxy-addr 0.0.0.0:8082
+      - --advertise-pandaproxy-addr redpanda:8082
     ports:
-      - "9092:9092"
-      - "9093:9093"
-    environment:
-      KAFKA_NODE_ID: 1
-      KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
-      KAFKA_LOG_DIRS: /var/lib/kafka/data
-      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      CLUSTER_ID: "zeroth-kafka-cluster-001"
+      - "9092:9092"     # Kafka API (wire-compatible)
+      - "8082:8082"     # HTTP Proxy API
     volumes:
-      - kafka-data:/var/lib/kafka/data
+      - redpanda-data:/var/lib/redpanda/data
     healthcheck:
-      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list"]
+      test: ["CMD", "rpk", "cluster", "health"]
       interval: 10s
       timeout: 5s
       retries: 10
-      start_period: 15s
+      start_period: 10s
 
   # ---------------------------------------------------------
   # Apache NiFi — Visual Data Flow Engine
@@ -243,7 +242,22 @@ services:
     volumes:
       - nifi-data:/opt/nifi/nifi-current/conf
     depends_on:
-      kafka:
+      redpanda:
+        condition: service_healthy
+
+  # ---------------------------------------------------------
+  # Redpanda Console — Web UI for Topics & Consumer Groups
+  # ---------------------------------------------------------
+  redpanda-console:
+    image: redpandadata/console:latest
+    container_name: redpanda-console
+    profiles: ["ingestion"]
+    ports:
+      - "8084:8080"
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+    depends_on:
+      redpanda:
         condition: service_healthy
 
   # =========================================================
@@ -382,7 +396,7 @@ services:
 volumes:
   minio-data:
   postgres-data:
-  kafka-data:
+  redpanda-data:
   nifi-data:
   redis-data:
   superset-db-data:
