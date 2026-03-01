@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License" />
+  <img src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg" alt="License" />
   <img src="https://img.shields.io/badge/docker-compose-2496ED?logo=docker&logoColor=white" alt="Docker" />
   <img src="https://img.shields.io/badge/Iceberg-Lakehouse-00C7B7" alt="Iceberg" />
   <img src="https://img.shields.io/badge/status-alpha-orange" alt="Status" />
