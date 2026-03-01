@@ -1,4 +1,5 @@
 import os
+from cachelib.redis import RedisCache
 
 # Superset secret key
 SECRET_KEY = os.environ.get("SUPERSET_SECRET_KEY", "zeroth-superset-secret-key-change-in-prod")
@@ -36,3 +37,27 @@ FEATURE_FLAGS = {
 # Web server config
 WEBSERVER_THREADS = 4
 WEBSERVER_TIMEOUT = 120
+
+
+class CeleryConfig:
+    # Point the worker to your Redis container
+    broker_url = "redis://redis:6379/0"
+    imports = ("superset.sql_lab", )
+    result_backend = "redis://redis:6379/0"
+    worker_prefetch_multiplier = 1
+    task_acks_late = False
+
+# Tell Superset to use this config
+CELERY_CONFIG = CeleryConfig
+
+# Tells the web UI where to find the data the worker just saved.
+RESULTS_BACKEND = RedisCache(
+    host='redis', 
+    port=6379, 
+    key_prefix='superset_results'
+)
+
+# Also enable the Async query feature flag if you haven't already
+FEATURE_FLAGS = {
+    "SQLLAB_BACKEND_PERSISTENCE": True
+}
