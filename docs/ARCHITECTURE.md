@@ -1,6 +1,6 @@
 # Zeroth — Technical Architecture Document
 
-> **Zero-cost Snowflake: Building Snowflake's Core Data Platform Capabilities with 100% Open-Source Technologies**
+> **A fully open-source data lakehouse — store, query, stream, and visualize data at any scale.**
 >
 > Version: 1.0 | Last Updated: February 2026
 
@@ -9,7 +9,7 @@
 ## Table of Contents
 
 1. [Executive Summary](#1-executive-summary)
-2. [Snowflake Architecture Overview](#2-snowflake-architecture-overview)
+2. [Zeroth Architecture Overview](#2-zeroth-architecture-overview)
 3. [Open-Source Component Mapping](#3-open-source-component-mapping)
 4. [Storage Layer — MinIO](#4-storage-layer--minio)
 5. [Table Format — Apache Iceberg + Parquet](#5-table-format--apache-iceberg--parquet)
@@ -28,13 +28,13 @@
 
 ## 1. Executive Summary
 
-Snowflake revolutionized cloud data warehousing with three key innovations:
+Zeroth is a fully open-source data lakehouse built on three architectural principles:
 
 1. **Separation of storage and compute** — scale each independently
 2. **Multi-cluster shared data** — concurrent workloads with zero contention
-3. **Near-zero administration** — automatic tuning, scaling, and maintenance
+3. **Low administration overhead** — automated tuning, scaling, and maintenance via Kubernetes
 
-This document presents a **fully open-source architecture** that replicates these capabilities using mature, production-proven technologies. The stack centers on **seven pillars**:
+This document describes Zeroth's architecture and the mature, production-proven technologies behind it. The stack centers on **seven pillars**:
 
 | Pillar | Technology | Role |
 |--------|-----------|------|
@@ -54,9 +54,9 @@ All orchestrated on **Kubernetes** for elastic scaling.
 
 ---
 
-## 2. Snowflake Architecture Overview
+## 2. Zeroth Architecture Overview
 
-Snowflake's architecture has three distinct layers:
+Zeroth's architecture has three distinct layers:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -84,19 +84,14 @@ Snowflake's architecture has three distinct layers:
 
 ---
 
-## 3. Open-Source Component Mapping
+## 3. Open-Source Component Architecture
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                        Snowflake                                     │
+│                          Zeroth                                      │
 ├──────────────────┬──────────────────┬────────────────────────────────┤
-│   Cloud Services │  Virtual         │   Centralized                  │
-│   Layer          │  Warehouses      │   Storage                      │
-├──────────────────┼──────────────────┼────────────────────────────────┤
-│                  │                  │                                │
-│                  │                  │          OPEN-SOURCE            │
-│                  │                  │          EQUIVALENT             │
-│                  │                  │                                │
+│   Cloud Services │  Compute         │   Centralized                  │
+│   Layer          │  Layer           │   Storage                      │
 ├──────────────────┼──────────────────┼────────────────────────────────┤
 │ Apache Polaris   │  Trino           │  MinIO                         │
 │ (Catalog, RBAC)  │  (MPP SQL)       │  (S3-compatible Object Store)  │
@@ -122,9 +117,9 @@ MinIO is a **high-performance, S3-compatible object storage** system. It is the 
 | **Encryption** | SSE-S3, SSE-KMS, and SSE-C encryption at rest |
 | **Multi-site Replication** | Async replication across sites for DR |
 
-### How It Maps to Snowflake
+### Storage Concepts
 
-| Snowflake Concept | MinIO Equivalent |
+| Concept | MinIO Implementation |
 |---|---|
 | Internal stage | S3 bucket (e.g., `s3://warehouse/`) |
 | Micro-partition files | Parquet files in bucket prefixes |
@@ -145,7 +140,7 @@ MINIO_VOLUMES: "/data{1...4}"        # 4 drives per node
 MINIO_SERVER_URL: "https://minio.example.com"
 ```
 
-### Storage Tiers (like Snowflake's automatic tiering)
+### Storage Tiers (Automatic Tiering)
 
 MinIO supports **Information Lifecycle Management (ILM)** rules to move cold data to cheaper tiers:
 
@@ -202,16 +197,16 @@ Apache Iceberg is the **most important component** in this architecture. It prov
 └─────────────────────────────────────┘
 ```
 
-### Feature Mapping to Snowflake
+### Feature Overview
 
-| Snowflake Feature | Iceberg Equivalent | Notes |
+| Feature | Iceberg Implementation | Notes |
 |---|---|---|
 | **Micro-partitions** | Parquet data files | Same concept: immutable, columnar, ~100-500 MB |
 | **Automatic clustering** | Sort orders + `optimize` | Manual trigger, but same effect |
 | **Time Travel** | Snapshot-based time travel | Query any previous version via snapshot ID or timestamp |
 | **Zero-copy Cloning** | Branching (via catalog) | New metadata pointer, no data copy |
 | **Schema Evolution** | Native schema evolution | Add, rename, reorder, widen columns |
-| **Partition Evolution** | Native partition evolution | **Better than Snowflake** — change partitioning without rewrite |
+| **Partition Evolution** | Native partition evolution | Change partitioning without data rewrite |
 | **ACID Transactions** | Optimistic concurrency | Serializable isolation via metadata swap |
 | **Data Retention** | Snapshot expiration | `expire_snapshots` procedure |
 
@@ -223,7 +218,7 @@ Apache Iceberg is the **most important component** in this architecture. It prov
 | **Partition evolution** | ⭐ Yes | No | No |
 | **Hidden partitioning** | ⭐ Yes | No | No |
 | **REST Catalog standard** | ⭐ Yes | Unity Catalog | No |
-| **Snowflake alignment** | ⭐ Snowflake uses Iceberg natively | No | No |
+| **Industry adoption** | ⭐ Used natively by major cloud data warehouses | No | No |
 | **Community momentum** | ⭐ Fastest growing | Large | Moderate |
 
 ### Parquet Format Details
@@ -262,7 +257,7 @@ Parquet File Structure:
 
 ### Why Polaris?
 
-Apache Polaris was **originally built inside Snowflake** as their internal Iceberg catalog, then open-sourced and donated to the Apache Software Foundation. It is the **reference implementation** of the Iceberg REST Catalog specification.
+Apache Polaris was **originally developed as an internal Iceberg catalog** for a major cloud data platform, then open-sourced and donated to the Apache Software Foundation. It is the **reference implementation** of the Iceberg REST Catalog specification.
 
 ### Polaris Architecture
 
@@ -277,7 +272,7 @@ Apache Polaris was **originally built inside Snowflake** as their internal Icebe
 │             │                                │
 │  ┌──────────▼──────────────────────────────┐ │
 │  │     Catalog Management                  │ │
-│  │  • Namespaces (≈ Snowflake databases)   │ │
+│  │  • Namespaces (≈ databases)         │ │
 │  │  • Tables                               │ │
 │  │  • Views                                │ │
 │  └──────────┬──────────────────────────────┘ │
@@ -297,9 +292,9 @@ Apache Polaris was **originally built inside Snowflake** as their internal Icebe
 └──────────────────────────────────────────────┘
 ```
 
-### Mapping to Snowflake Concepts
+### Mapping to Data Platform Concepts
 
-| Snowflake Concept | Polaris Equivalent |
+| Data Platform Concept | Polaris Equivalent |
 |---|---|
 | Account | Catalog (top-level container) |
 | Database | Namespace |
@@ -311,7 +306,7 @@ Apache Polaris was **originally built inside Snowflake** as their internal Icebe
 
 ### RBAC Model
 
-Polaris provides **Snowflake-style RBAC** with two role types:
+Polaris provides **enterprise-grade RBAC** with two role types:
 
 ```
 Principal Roles (WHO)          Catalog Roles (WHAT)
@@ -338,7 +333,7 @@ Principal Roles (WHO)          Catalog Roles (WHAT)
 | Built-in RBAC | ⭐ Native | ❌ External needed |
 | Git-like branching | ❌ Not supported | ⭐ Core feature |
 | CI/CD for data | ❌ Not supported | ⭐ Branch → test → merge |
-| Snowflake parity | ⭐ Highest (from Snowflake) | ✅ Partial |
+| Enterprise parity | ⭐ Highest (from major cloud vendor) | ✅ Partial |
 | Multi-engine support | ⭐ REST standard | ⭐ REST + native |
 
 > **Recommendation:** Use **Polaris as primary catalog** for production governance. Add **Nessie** alongside it if you need data versioning / branching workflows (e.g., staging → production promotions).
@@ -349,14 +344,14 @@ Principal Roles (WHO)          Catalog Roles (WHAT)
 
 ### Why Trino?
 
-Trino (formerly PrestoSQL) is an **open-source distributed SQL query engine** designed for interactive analytics. It maps directly to Snowflake's Virtual Warehouses.
+Trino (formerly PrestoSQL) is an **open-source distributed SQL query engine** designed for interactive analytics. In Zeroth, Trino clusters serve as the compute layer.
 
 ### Architecture
 
 ```
 ┌───────────────────────────────────────────────────┐
 │                  Trino Cluster                     │
-│            (≈ Snowflake Virtual Warehouse)         │
+│            (≈ Zeroth Compute Cluster)              │
 │                                                    │
 │  ┌─────────────────────────────────────────────┐  │
 │  │              Coordinator                     │  │
@@ -375,9 +370,9 @@ Trino (formerly PrestoSQL) is an **open-source distributed SQL query engine** de
 └───────────────────────────────────────────────────┘
 ```
 
-### Mapping to Snowflake
+### Compute Layer Concepts
 
-| Snowflake Concept | Trino Equivalent |
+| Concept | Trino Implementation |
 |---|---|
 | Virtual Warehouse (XS–6XL) | Trino cluster (configure worker count) |
 | Multi-cluster warehouse | Multiple Trino clusters on K8s |
@@ -388,7 +383,7 @@ Trino (formerly PrestoSQL) is an **open-source distributed SQL query engine** de
 
 ### Virtual Warehouse Sizing Equivalent
 
-| Snowflake VW Size | Trino Equivalent | Workers | Memory/Worker |
+| Cluster Size | Trino Configuration | Workers | Memory/Worker |
 |---|---|---|---|
 | X-Small | trino-xs | 1 | 8 GB |
 | Small | trino-sm | 2 | 16 GB |
@@ -399,7 +394,7 @@ Trino (formerly PrestoSQL) is an **open-source distributed SQL query engine** de
 
 ### Concurrency & Resource Groups
 
-Trino's **Resource Groups** replicate Snowflake's concurrency controls:
+Trino's **Resource Groups** provide concurrency controls:
 
 ```json
 {
@@ -430,7 +425,7 @@ Trino's **Resource Groups** replicate Snowflake's concurrency controls:
 
 ### Connectors (Federated Query — Bonus!)
 
-Unlike Snowflake, Trino can query **multiple data sources** simultaneously:
+Trino can also query **multiple data sources** simultaneously (federated queries):
 
 ```sql
 -- Query across Iceberg, PostgreSQL, and MongoDB in one query!
@@ -450,10 +445,10 @@ JOIN mongodb.app.user_prefs m ON i.user_id = m.user_id;
 
 ### The Ingestion Problem
 
-Snowflake provides **Snowpipe** for automatic data ingestion — files land in a stage and are automatically loaded into tables. Replicating this requires two components:
+For automatic data ingestion — where events or files are continuously loaded into Iceberg tables — Zeroth uses two components:
 
-- **Redpanda** — Kafka-compatible event streaming in C++ (replaces Snowflake Streams)
-- **Apache NiFi** — Visual data flow engine (replaces Snowpipe)
+- **Redpanda** — Kafka-compatible event streaming in C++ (handles real-time data streams)
+- **Apache NiFi** — Visual data flow engine (handles automatic ingestion pipelines)
 
 ### Pipeline Architecture: Redpanda → NiFi → Iceberg
 
@@ -476,7 +471,7 @@ Log Streams   ─┘                                     │  ValidateRecord │
 | **Role** | High-throughput event buffer between producers and NiFi |
 | **Kafka compatible** | 100% Kafka wire-protocol compatible — all Kafka clients work unchanged |
 | **No JVM** | Written in C++, uses ~256 MB RAM vs Kafka's ~1-2 GB |
-| **Replay** | Consumers can re-read historical events (Snowflake Streams equivalent) |
+| **Replay** | Consumers can re-read historical events (change data capture equivalent) |
 | **Decoupling** | Multiple consumers (NiFi, Spark, Flink) can read the same topics |
 | **Throughput** | Millions of events/sec per cluster |
 | **Retention** | Configurable retention (7 days default, up to infinite) |
@@ -486,7 +481,7 @@ Log Streams   ─┘                                     │  ValidateRecord │
 | Aspect | Details |
 |--------|---------|
 | **Role** | Visual, drag-and-drop data routing and transformation |
-| **Snowpipe equivalent** | Consumes from Redpanda, transforms, writes to Iceberg via Trino |
+| **Auto-ingestion** | Consumes from Redpanda, transforms, writes to Iceberg via Trino |
 | **300+ processors** | Built-in connectors for files, databases, APIs, cloud services |
 | **PutDatabaseRecord** | JDBC-based Iceberg writer via Trino (PutIceberg has MinIO compatibility issues) |
 | **Backpressure** | Built-in per-connection backpressure (prevents data loss) |
@@ -549,11 +544,11 @@ The working NiFi pipeline uses **PutDatabaseRecord** with Trino JDBC to write to
 
 ### Why Superset?
 
-Apache Superset is an **open-source BI platform** that replaces Snowflake's **Snowsight** web console. It provides a SQL editor, rich dashboards, and data exploration — all connected to Trino.
+Apache Superset is an **open-source BI platform** that serves as Zeroth's web console. It provides a SQL editor, rich dashboards, and data exploration — all connected to Trino.
 
-### Mapping to Snowsight
+### Web Console Features
 
-| Snowsight Feature | Superset Equivalent |
+| Feature | Superset Implementation |
 |---|---|
 | **Worksheets** (SQL editor) | **SQL Lab** — full SQL IDE with auto-complete, query history |
 | **Dashboards** | **Dashboards** — 50+ chart types, filters, drill-down |
@@ -569,7 +564,7 @@ Apache Superset is an **open-source BI platform** that replaces Snowflake's **Sn
 ```
 ┌─────────────────────────────────────────────────────┐
 │              Apache Superset                        │
-│          (≈ Snowflake Snowsight)                    │
+│          (≈ Zeroth Web Console)                     │
 │                                                     │
 │  ┌──────────────┐  ┌───────────┐  ┌──────────────┐  │
 │  │  SQL Lab     │  │ Dashboards│  │ Data Explorer│  │
@@ -609,7 +604,7 @@ Once connected, all Iceberg schemas and tables are browsable in Superset's SQL L
 | **50+ chart types** | Bar, line, pie, treemap, heatmap, geospatial, time-series, etc. |
 | **Dashboard filters** | Cross-filter across charts, date range pickers, dropdown filters |
 | **Jinja templating** | Dynamic SQL with `{{ current_username() }}`, date macros |
-| **Row-level security** | Restrict data visibility per role (like Snowflake row access policies) |
+| **Row-level security** | Restrict data visibility per role (row access policies) |
 | **Alerts & Reports** | Schedule queries, get notified on thresholds (email/Slack) |
 | **Embedded analytics** | Embed dashboards via iframe in your own apps |
 | **Caching** | Redis-backed query caching for faster dashboard loads |
@@ -620,7 +615,7 @@ Once connected, all Iceberg schemas and tables are browsable in Superset's SQL L
 
 ### Full Feature Comparison
 
-| Snowflake Feature | Open-Source Status | Technology | Gap |
+| Feature | Status | Technology | Notes |
 |---|:---:|---|---|
 | **Separation of storage/compute** | ✅ Full | MinIO + Trino | None |
 | **Columnar storage** | ✅ Full | Apache Parquet | None |
@@ -628,7 +623,7 @@ Once connected, all Iceberg schemas and tables are browsable in Superset's SQL L
 | **Time Travel** | ✅ Full | Iceberg snapshots | None |
 | **Zero-copy cloning** | ✅ Full | Iceberg branches/tags | None |
 | **Schema evolution** | ✅ Full | Iceberg native | None |
-| **Partition evolution** | ⭐ Better | Iceberg native | Better than Snowflake |
+| **Partition evolution** | ⭐ Advanced | Iceberg native | Change partitioning without data rewrite |
 | **SQL engine (ANSI SQL)** | ✅ Full | Trino | Minor syntax diffs |
 | **RBAC** | ✅ Full | Polaris | None |
 | **Concurrency scaling** | ✅ Full | K8s + multi-cluster Trino | Requires K8s expertise |
@@ -636,7 +631,7 @@ Once connected, all Iceberg schemas and tables are browsable in Superset's SQL L
 | **Semi-structured data** | ✅ Full | Trino JSON functions | None |
 | **Secure data sharing** | ⚠️ Partial | Polaris cross-catalog | Less polished |
 | **Streams & Tasks** | ✅ Full | Redpanda (streaming) + NiFi (routing) | Visual pipeline builder |
-| **Snowpipe (auto-ingest)** | ✅ Full | Redpanda → NiFi → PutIceberg | NiFi drag-and-drop UI |
+| **Auto-ingest** | ✅ Full | Redpanda → NiFi → PutIceberg | NiFi drag-and-drop UI |
 | **Query result caching** | ⚠️ Partial | Trino + Alluxio | Not as transparent |
 | **Materialized views** | ❌ Gap | Not native in Iceberg/Trino | Use dbt for models |
 | **UDFs (Java/Python)** | ⚠️ Partial | Trino UDFs (Java) | No Python UDFs |
@@ -651,7 +646,7 @@ Once connected, all Iceberg schemas and tables are browsable in Superset's SQL L
 | **Federated queries** | Query Postgres, MongoDB, Kafka, etc. alongside Iceberg |
 | **Engine flexibility** | Use Spark, Flink, DuckDB, or Trino on the same tables |
 | **Vendor independence** | No lock-in; portable Iceberg tables |
-| **Cost** | No Snowflake credits; pay only for infrastructure |
+| **Cost** | No vendor license fees; pay only for infrastructure |
 
 ---
 
@@ -724,7 +719,7 @@ See [`docker/docker-compose.yml`](../docker/docker-compose.yml) for the full con
 ### Auto-Scaling with KEDA
 
 ```yaml
-# Scale Trino workers based on pending queries (like Snowflake auto-scale)
+# Scale Trino workers based on pending queries (auto-scale)
 apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
@@ -750,7 +745,7 @@ spec:
 
 ### Query Performance Optimization
 
-| Technique | How | Snowflake Equivalent |
+| Technique | How | Equivalent Concept |
 |-----------|-----|---------------------|
 | **Partition pruning** | Iceberg hidden partitioning + manifest stats | Micro-partition pruning |
 | **Predicate pushdown** | Parquet row group min/max + Iceberg file stats | Automatic pruning |
@@ -763,12 +758,12 @@ spec:
 
 Benchmarks vary by hardware, data, and query patterns. General guidance:
 
-| Workload | Expected Performance vs. Snowflake |
+| Workload | Expected Performance |
 |----------|-----------------------------------|
 | Simple aggregations (scan-heavy) | **80-100%** — Trino + Parquet is very efficient |
-| Complex joins (shuffle-heavy) | **60-80%** — Snowflake's optimizer is highly tuned |
+| Complex joins (shuffle-heavy) | **60-80%** of managed cloud warehouses — their optimizers have years of tuning |
 | High concurrency (100+ users) | **70-90%** — requires proper K8s tuning |
-| Semi-structured (JSON) | **70-85%** — Snowflake's VARIANT is deeply optimized |
+| Semi-structured (JSON) | **70-85%** of managed warehouses — VARIANT types are deeply optimized |
 | Time travel queries | **95-100%** — Iceberg snapshots are very efficient |
 
 ### Caching Architecture
@@ -846,13 +841,13 @@ Client ──▶ Trino Coordinator ──▶ Check ─┤ Result Cache │ ─�
 
 ## 14. Limitations & Trade-offs
 
-### Things Snowflake Does Better (Today)
+### Known Gaps vs. Managed Cloud Warehouses
 
 | Area | Gap | Mitigation |
 |------|-----|------------|
 | **Zero-ops** | Open-source requires K8s expertise and operational overhead | Use managed K8s (EKS/GKE) + Helm charts + GitOps |
-| **Query optimizer** | Snowflake's optimizer has years of tuning on customer workloads | Trino's CBO is improving; contribute upstream |
-| **Auto-clustering** | Snowflake automatically re-clusters data | Schedule `optimize` jobs via Airflow/cron |
+| **Query optimizer** | Managed warehouse optimizers have years of tuning on customer workloads | Trino's CBO is improving; contribute upstream |
+| **Auto-clustering** | Managed warehouses automatically re-cluster data | Schedule `optimize` jobs via Airflow/cron |
 | **Materialized views** | No native MVs in Trino + Iceberg | Use dbt incremental models |
 | **Python UDFs** | Trino only supports Java UDFs | Use Spark for Python-heavy workloads |
 | **Marketplace** | No data marketplace | Build custom using Polaris cross-catalog sharing |
@@ -861,7 +856,7 @@ Client ──▶ Trino Coordinator ──▶ Check ─┤ Result Cache │ ─�
 ### Operational Complexity
 
 > [!WARNING]
-> This stack trades **Snowflake's simplicity** for **full control and cost savings**. You will need:
+> This stack trades **managed simplicity** for **full control and cost savings**. You will need:
 > - Kubernetes expertise (or managed K8s)
 > - Monitoring and alerting (Prometheus + Grafana)
 > - On-call for storage, compute, and catalog components
@@ -869,7 +864,7 @@ Client ──▶ Trino Coordinator ──▶ Check ─┤ Result Cache │ ─�
 
 ### When NOT to Use This Stack
 
-- **Small team (< 5 engineers)** with no K8s experience → Use Snowflake or BigQuery
+- **Small team (< 5 engineers)** with no K8s experience → Consider a managed cloud warehouse
 - **Need it running today** → Managed services are faster to deploy
 - **Compliance requires vendor SLAs** → Use Starburst (commercial Trino) or Tabular (commercial Iceberg)
 
@@ -928,7 +923,7 @@ Client ──▶ Trino Coordinator ──▶ Check ─┤ Result Cache │ ─�
 - [Apache Parquet](https://parquet.apache.org/)
 - [KEDA — Kubernetes Event-driven Autoscaling](https://keda.sh/)
 - [Apache Ranger](https://ranger.apache.org/)
-- [Snowflake Architecture Whitepaper](https://docs.snowflake.com/en/user-guide/intro-key-concepts)
+- [Data Warehouse Architecture Concepts](https://docs.snowflake.com/en/user-guide/intro-key-concepts)
 
 ---
 

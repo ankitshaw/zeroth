@@ -19,7 +19,7 @@
 
 **Zeroth** is a **fully open-source data lakehouse** — a complete platform for storing, querying, streaming, and visualizing data at any scale. It combines best-in-class open-source technologies into a single, cohesive stack that runs on your laptop with Docker or scales to production on Kubernetes.
 
-Think of it as your **own cloud data warehouse** — with full SQL analytics, ACID transactions, time travel, role-based access control, real-time ingestion, and a BI dashboard — all without paying a single vendor license fee.
+Think of it as your **own cloud data warehouse** — with full SQL analytics, ACID transactions, time travel, role-based access control, real-time ingestion, and a BI dashboard — all built on open-source foundations you fully control.
 
 ### Why Zeroth?
 
