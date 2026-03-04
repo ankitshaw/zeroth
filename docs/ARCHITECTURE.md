@@ -52,6 +52,32 @@ All orchestrated on **Kubernetes** for elastic scaling.
 
 ![Zeroth Architecture Diagram](architecture-diagram.png)
 
+### Independently Scalable Layers
+
+A core design principle of Zeroth is that each layer scales independently — you only scale what you need.
+
+```
+        Scale independently
+             ↕  ↕  ↕
+
+┌──────────────────────────────────────────────┐
+│  Catalog Layer   (Polaris)                   │  ← add replicas for metadata throughput
+├──────────────────────────────────────────────┤
+│  Compute Layer   (Trino Cluster A — ETL)     │  ← add workers for faster queries
+│                  (Trino Cluster B — Analytics)│  ← add clusters for more teams
+├──────────────────────────────────────────────┤
+│  Storage Layer   (MinIO — 4+ nodes)          │  ← add nodes/drives for more data
+└──────────────────────────────────────────────┘
+```
+
+| Layer | Scale By | When To Scale |
+|-------|----------|---------------|
+| **Storage** (MinIO) | Add nodes or drives to the MinIO cluster | Data volume is growing; read/write throughput is saturated |
+| **Compute** (Trino) | Add workers to a cluster, or spin up additional clusters | Queries are slow; concurrency is high; new teams need isolation |
+| **Catalog** (Polaris) | Add replicas of the Polaris service; scale PostgreSQL backend | Metadata operations (table lookups, permission checks) are a bottleneck |
+
+**Why this matters:** In a monolithic data warehouse, storage and compute are bundled — you pay for both even when you only need one. In Zeroth, if queries are slow but storage is fine, you only scale Trino. If data is growing but query load is light, you only add MinIO nodes. On Kubernetes, Trino can even scale to zero when idle and auto-resume when a query arrives (via KEDA).
+
 ---
 
 ## 2. Zeroth Architecture Overview
